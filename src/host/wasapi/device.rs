@@ -52,6 +52,13 @@ const PKEY_AUDIOENDPOINT_JACKSUBTYPE: PROPERTYKEY = PROPERTYKEY {
     pid: 8,
 };
 
+/// PKEY_Devices_AudioDevice_RawProcessingSupported (PID 2) - VT_BOOL, true if the endpoint
+/// supports AUDCLNT_STREAMOPTIONS_RAW. Defined here to avoid the Win32_Storage_EnhancedStorage feature.
+const PKEY_DEVICES_AUDIODEVICE_RAWPROCESSINGSUPPORTED: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x8943b373_388c_4395_b557_bc6dbaffafdb),
+    pid: 2,
+};
+
 const DEFAULT_FLAGS: u32 = Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 
 /// Wrapper because of that stupid decision to remove `Send` and `Sync` from raw pointers.
@@ -853,6 +860,8 @@ impl Device {
 
             if self.data_flow() == Audio::eRender {
                 stream_flags |= Audio::AUDCLNT_STREAMFLAGS_LOOPBACK;
+            } else {
+                set_speech_client_properties(&audio_client, self.immdevice(), config.channels);
             }
 
             // Computing the format and initializing the device.
@@ -1179,6 +1188,46 @@ fn get_enumerator() -> &'static Enumerator {
             Enumerator(enumerator)
         }
     })
+}
+
+// Mark a capture stream as speech and, when the endpoint supports it, open it in raw mode so OS
+// and OEM effects (noise suppression, AGC, beamforming) are bypassed, as Chromium does. Must be
+// called before `Initialize`. A failure is ignored: the stream still opens with default processing.
+unsafe fn set_speech_client_properties(
+    audio_client: &Audio::IAudioClient,
+    device: Option<Audio::IMMDevice>,
+    channels: crate::ChannelCount,
+) {
+    let raw = (1..=8).contains(&channels)
+        && device.is_some_and(|device| raw_processing_supported(&device));
+    let properties = Audio::AudioClientProperties {
+        cbSize: mem::size_of::<Audio::AudioClientProperties>() as u32,
+        bIsOffload: false.into(),
+        eCategory: Audio::AudioCategory_Speech,
+        Options: if raw {
+            Audio::AUDCLNT_STREAMOPTIONS_RAW
+        } else {
+            Audio::AUDCLNT_STREAMOPTIONS_NONE
+        },
+    };
+    if let Ok(audio_client2) = audio_client.cast::<Audio::IAudioClient2>() {
+        let _ = audio_client2.SetClientProperties(&properties);
+    }
+}
+
+unsafe fn raw_processing_supported(device: &Audio::IMMDevice) -> bool {
+    let Ok(property_store) = device.OpenPropertyStore(STGM_READ) else {
+        return false;
+    };
+    let Ok(mut property_value) =
+        property_store.GetValue(&PKEY_DEVICES_AUDIODEVICE_RAWPROCESSINGSUPPORTED)
+    else {
+        return false;
+    };
+    let supported =
+        StructuredStorage::PropVariantToBoolean(&property_value).is_ok_and(|value| value.as_bool());
+    StructuredStorage::PropVariantClear(&mut property_value).ok();
+    supported
 }
 
 // Helper function to query a DWORD property from a WASAPI device property store
