@@ -24,6 +24,7 @@ use windows::{
         Devices::Properties,
         Foundation::{ERROR_TIMEOUT, PROPERTYKEY},
         Media::{Audio, Audio::IAudioRenderClient, KernelStreaming, Multimedia},
+        Storage::EnhancedStorage::PKEY_Devices_AudioDevice_RawProcessingSupported,
         System::{
             Com,
             Com::{StructuredStorage, STGM_READ},
@@ -50,13 +51,6 @@ const PKEY_AUDIOENDPOINT_FORMFACTOR: PROPERTYKEY = PROPERTYKEY {
 const PKEY_AUDIOENDPOINT_JACKSUBTYPE: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x1da5d803_d492_4edd_8c23_e0c0ffee7f0e),
     pid: 8,
-};
-
-/// PKEY_Devices_AudioDevice_RawProcessingSupported (PID 2) - VT_BOOL, true if the endpoint
-/// supports AUDCLNT_STREAMOPTIONS_RAW. Defined here to avoid the Win32_Storage_EnhancedStorage feature.
-const PKEY_DEVICES_AUDIODEVICE_RAWPROCESSINGSUPPORTED: PROPERTYKEY = PROPERTYKEY {
-    fmtid: GUID::from_u128(0x8943b373_388c_4395_b557_bc6dbaffafdb),
-    pid: 2,
 };
 
 const DEFAULT_FLAGS: u32 = Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
@@ -1190,9 +1184,7 @@ fn get_enumerator() -> &'static Enumerator {
     })
 }
 
-// Mark a capture stream as speech and, when the endpoint supports it, open it in raw mode so OS
-// and OEM effects (noise suppression, AGC, beamforming) are bypassed, as Chromium does. Must be
-// called before `Initialize`. A failure is ignored: the stream still opens with default processing.
+// Must be called before `Initialize`.
 unsafe fn set_speech_client_properties(
     audio_client: &Audio::IAudioClient,
     device: Option<Audio::IMMDevice>,
@@ -1220,7 +1212,7 @@ unsafe fn raw_processing_supported(device: &Audio::IMMDevice) -> bool {
         return false;
     };
     let Ok(mut property_value) =
-        property_store.GetValue(&PKEY_DEVICES_AUDIODEVICE_RAWPROCESSINGSUPPORTED)
+        property_store.GetValue(&PKEY_Devices_AudioDevice_RawProcessingSupported)
     else {
         return false;
     };
